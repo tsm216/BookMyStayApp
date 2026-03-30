@@ -1,5 +1,7 @@
 import java.util.HashMap;
 import java.util.Map;
+import java.util.LinkedList;
+import java.util.Queue;
 
 abstract class Room {
     protected int numberOfBeds;
@@ -37,64 +39,56 @@ class SuiteRoom extends Room {
     }
 }
 
-class RoomInventory {
-    private Map<String, Integer> roomAvailability;
+class Reservation {
+    private String guestName;
+    private String roomType;
 
-    public RoomInventory() {
-        roomAvailability = new HashMap<>();
-        initializeInventory();
+    public Reservation(String guestName, String roomType) {
+        this.guestName = guestName;
+        this.roomType = roomType;
     }
 
-    private void initializeInventory() {
-        roomAvailability.put("Single", 5);
-        roomAvailability.put("Double", 3);
-        roomAvailability.put("Suite", 2);
+    public String getGuestName() {
+        return guestName;
     }
 
-    public Map<String, Integer> getRoomAvailability() {
-        return roomAvailability;
-    }
-
-    public void updateAvailability(String roomType, int count) {
-        roomAvailability.put(roomType, count);
+    public String getRoomType() {
+        return roomType;
     }
 }
 
-class RoomSearchService {
-    public void searchAvailableRooms(RoomInventory inventory, Room singleRoom, Room doubleRoom, Room suiteRoom) {
-        Map<String, Integer> availability = inventory.getRoomAvailability();
+class BookingRequestQueue {
+    private Queue<Reservation> requests;
 
-        if (availability.get("Single") > 0) {
-            System.out.println("Single Room:");
-            singleRoom.displayRoomDetails();
-            System.out.println("Available: " + availability.get("Single") + "\n");
-        }
+    public BookingRequestQueue() {
+        requests = new LinkedList<>();
+    }
 
-        if (availability.get("Double") > 0) {
-            System.out.println("Double Room:");
-            doubleRoom.displayRoomDetails();
-            System.out.println("Available: " + availability.get("Double") + "\n");
-        }
+    public void addRequest(Reservation reservation) {
+        requests.add(reservation);
+    }
 
-        if (availability.get("Suite") > 0) {
-            System.out.println("Suite Room:");
-            suiteRoom.displayRoomDetails();
-            System.out.println("Available: " + availability.get("Suite") + "\n");
-        }
+    public Queue<Reservation> getRequests() {
+        return requests;
     }
 }
 
 public class BookMyStayApp {
     public static void main(String[] args) {
-        System.out.println("Room Search\n");
+        System.out.println("Booking Request Intake\n");
 
-        RoomInventory inventory = new RoomInventory();
-        RoomSearchService searchService = new RoomSearchService();
+        BookingRequestQueue bookingQueue = new BookingRequestQueue();
 
-        Room single = new SingleRoom();
-        Room doubleRm = new DoubleRoom();
-        Room suite = new SuiteRoom();
+        bookingQueue.addRequest(new Reservation("Alice", "Single"));
+        bookingQueue.addRequest(new Reservation("Bob", "Double"));
+        bookingQueue.addRequest(new Reservation("Charlie", "Suite"));
 
-        searchService.searchAvailableRooms(inventory, single, doubleRm, suite);
+        System.out.println("Current Booking Requests in Queue:");
+        for (Reservation res : bookingQueue.getRequests()) {
+            System.out.println("Guest: " + res.getGuestName() + " | Requested: " + res.getRoomType());
+        }
+
+        System.out.println("\nRequests are stored in arrival order (FIFO).");
+        System.out.println("No rooms have been allocated yet.");
     }
 }
