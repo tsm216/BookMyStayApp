@@ -1,23 +1,28 @@
+import java.io.*;
 import java.util.*;
 
-// --- DOMAIN MODELS ---
-class Reservation {
+// --- DOMAIN MODELS (Must implement Serializable) ---
+class Reservation implements Serializable {
+    private static final long serialVersionUID = 1L;
     private String guestName;
     private String roomType;
     private String reservationId;
 
-    public Reservation(String guestName, String roomType) {
+    public Reservation(String guestName, String roomType, String reservationId) {
         this.guestName = guestName;
         this.roomType = roomType;
+        this.reservationId = reservationId;
     }
 
-    public String getGuestName() { return guestName; }
-    public String getRoomType() { return roomType; }
-    public void setReservationId(String id) { this.reservationId = id; }
+    @Override
+    public String toString() {
+        return "ID: " + reservationId + " | Guest: " + guestName + " | Room: " + roomType;
+    }
 }
 
-// --- THREAD-SAFE SERVICES ---
-class RoomInventory {
+// --- SERVICES ---
+class RoomInventory implements Serializable {
+    private static final long serialVersionUID = 1L;
     private Map<String, Integer> roomAvailability = new HashMap<>();
 
     public RoomInventory() {
@@ -26,99 +31,87 @@ class RoomInventory {
         roomAvailability.put("Suite", 2);
     }
 
-    // Synchronized to prevent two threads from reading/writing simultaneously
-    public synchronized int getAvailability(String roomType) {
-        return roomAvailability.getOrDefault(roomType, 0);
+    public void updateAvailability(String type, int count) {
+        roomAvailability.put(type, count);
     }
 
-    public synchronized void updateAvailability(String roomType, int count) {
-        roomAvailability.put(roomType, count);
+    public void displayInventory() {
+        System.out.println("Current Inventory: " + roomAvailability);
     }
 }
 
-class BookingHistory {
-    private List<Reservation> history = Collections.synchronizedList(new ArrayList<>());
+class BookingHistory implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private List<Reservation> history = new ArrayList<>();
+
     public void addRecord(Reservation res) { history.add(res); }
-    public int getCount() { return history.size(); }
+    public List<Reservation> getHistory() { return history; }
 }
 
-class ConcurrentBookingProcessor implements Runnable {
-    private Queue<Reservation> requestQueue;
-    private RoomInventory inventory;
-    private BookingHistory history;
-    private Random random = new Random();
+class PersistenceService {
+    private static final String FILE_NAME = "hotel_state.ser";
 
-    public ConcurrentBookingProcessor(Queue<Reservation> queue, RoomInventory inventory, BookingHistory history) {
-        this.requestQueue = queue;
-        this.inventory = inventory;
-        this.history = history;
-    }
-
-    @Override
-    public void run() {
-        while (true) {
-            Reservation request;
-
-            // Synchronize on the queue to safely poll requests
-            synchronized (requestQueue) {
-                if (requestQueue.isEmpty()) break;
-                request = requestQueue.poll();
-            }
-
-            processRequest(request);
+    public void saveState(RoomInventory inventory, BookingHistory history) {
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(FILE_NAME))) {
+            oos.writeObject(inventory);
+            oos.writeObject(history);
+            System.out.println("SYSTEM: State successfully persisted to " + FILE_NAME);
+        } catch (IOException e) {
+            System.err.println("SAVE ERROR: " + e.getMessage());
         }
     }
 
-    private void processRequest(Reservation request) {
-        String type = request.getRoomType();
+    public Object[] loadState() {
+        File file = new File(FILE_NAME);
+        if (!file.exists()) {
+            System.out.println("SYSTEM: No previous state found. Starting fresh.");
+            return null;
+        }
 
-        // Critical Section: Ensure inventory check and update are atomic
-        synchronized (inventory) {
-            int currentStock = inventory.getAvailability(type);
-            if (currentStock > 0) {
-                String roomId = type.substring(0, 1).toUpperCase() + (random.nextInt(900) + 100);
-                request.setReservationId(roomId);
-
-                inventory.updateAvailability(type, currentStock - 1);
-                history.addRecord(request);
-
-                System.out.println(Thread.currentThread().getName() + " CONFIRMED: " +
-                        request.getGuestName() + " (Room ID: " + roomId + ")");
-            } else {
-                System.out.println(Thread.currentThread().getName() + " FAILED: No rooms for " +
-                        request.getGuestName());
-            }
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(FILE_NAME))) {
+            RoomInventory inventory = (RoomInventory) ois.readObject();
+            BookingHistory history = (BookingHistory) ois.readObject();
+            System.out.println("SYSTEM: State successfully recovered from " + FILE_NAME);
+            return new Object[]{inventory, history};
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("RECOVERY ERROR: " + e.getMessage());
+            return null;
         }
     }
 }
 
 // --- MAIN APPLICATION ---
 public class BookMyStayApp {
-    public static void main(String[] args) throws InterruptedException {
-        System.out.println("--- Concurrent Booking Simulation ---\n");
+    public static void main(String[] args) {
+        PersistenceService persistence = new PersistenceService();
+        RoomInventory inventory;
+        BookingHistory history;
 
-        RoomInventory inventory = new RoomInventory();
-        BookingHistory history = new BookingHistory();
-        Queue<Reservation> requestQueue = new LinkedList<>();
-
-        // Add 10 simultaneous requests
-        for (int i = 1; i <= 10; i++) {
-            requestQueue.add(new Reservation("Guest_" + i, (i % 2 == 0) ? "Single" : "Suite"));
+        // 1. Try to recover system state
+        Object[] recovered = persistence.loadState();
+        if (recovered != null) {
+            inventory = (RoomInventory) recovered[0];
+            history = (BookingHistory) recovered[1];
+        } else {
+            inventory = new RoomInventory();
+            history = new BookingHistory();
+            // Simulate initial booking to have something to save
+            Reservation res = new Reservation("John Doe", "Suite", "S999");
+            inventory.updateAvailability("Suite", 1);
+            history.addRecord(res);
         }
 
-        // Create two worker threads (simulating two booking servers processing the same queue)
-        Thread thread1 = new Thread(new ConcurrentBookingProcessor(requestQueue, inventory, history), "Processor_1");
-        Thread thread2 = new Thread(new ConcurrentBookingProcessor(requestQueue, inventory, history), "Processor_2");
+        // 2. Display current state (Recovered or New)
+        System.out.println("\n--- Current System State ---");
+        inventory.displayInventory();
+        System.out.println("Bookings in History: " + history.getHistory().size());
+        for (Reservation r : history.getHistory()) System.out.println(r);
 
-        thread1.start();
-        thread2.start();
+        // 3. Simulate a change and persist (Preparation for Shutdown)
+        System.out.println("\nUpdating state and saving...");
+        inventory.updateAvailability("Single", 2);
+        persistence.saveState(inventory, history);
 
-        // Wait for both threads to finish
-        thread1.join();
-        thread2.join();
-
-        System.out.println("\nSimulation Complete.");
-        System.out.println("Total Bookings in History: " + history.getCount());
-        System.out.println("Final Suite Inventory: " + inventory.getAvailability("Suite"));
+        System.out.println("\nApplication Terminated. Run again to see recovery in action.");
     }
 }
