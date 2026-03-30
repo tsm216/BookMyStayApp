@@ -1,13 +1,9 @@
 import java.util.*;
 
 // --- CUSTOM EXCEPTIONS ---
-class InvalidRoomException extends Exception {
-    public InvalidRoomException(String message) { super(message); }
-}
-
-class NoAvailabilityException extends Exception {
-    public NoAvailabilityException(String message) { super(message); }
-}
+class InvalidRoomException extends Exception { public InvalidRoomException(String m) { super(m); } }
+class NoAvailabilityException extends Exception { public NoAvailabilityException(String m) { super(m); } }
+class ReservationNotFoundException extends Exception { public ReservationNotFoundException(String m) { super(m); } }
 
 // --- DOMAIN MODELS ---
 abstract class Room {
@@ -45,30 +41,51 @@ class Reservation {
 // --- SERVICES ---
 class RoomInventory {
     private Map<String, Integer> roomAvailability = new HashMap<>();
-
     public RoomInventory() {
         roomAvailability.put("Single", 5);
         roomAvailability.put("Double", 3);
         roomAvailability.put("Suite", 2);
     }
-
-    public boolean isValidRoomType(String type) {
-        return roomAvailability.containsKey(type);
-    }
-
-    public int getAvailability(String roomType) {
-        return roomAvailability.getOrDefault(roomType, 0);
-    }
-
-    public void updateAvailability(String roomType, int count) {
-        roomAvailability.put(roomType, count);
-    }
+    public boolean isValidRoomType(String type) { return roomAvailability.containsKey(type); }
+    public int getAvailability(String roomType) { return roomAvailability.getOrDefault(roomType, 0); }
+    public void updateAvailability(String roomType, int count) { roomAvailability.put(roomType, count); }
 }
 
 class BookingHistory {
     private List<Reservation> history = new ArrayList<>();
     public void addRecord(Reservation res) { history.add(res); }
+    public void removeRecord(Reservation res) { history.remove(res); }
     public List<Reservation> getHistory() { return history; }
+}
+
+class CancellationService {
+    private Stack<String> releasedRoomIds = new Stack<>();
+
+    public void cancelBooking(String reservationId, BookingHistory history, RoomInventory inventory) throws ReservationNotFoundException {
+        Reservation found = null;
+        for (Reservation res : history.getHistory()) {
+            if (res.getReservationId().equals(reservationId)) {
+                found = res;
+                break;
+            }
+        }
+
+        if (found == null) {
+            throw new ReservationNotFoundException("Reservation ID " + reservationId + " not found.");
+        }
+
+        // 1. Rollback Room ID to Stack
+        releasedRoomIds.push(found.getReservationId());
+
+        // 2. Increment Inventory
+        int currentCount = inventory.getAvailability(found.getRoomType());
+        inventory.updateAvailability(found.getRoomType(), currentCount + 1);
+
+        // 3. Remove from History
+        history.removeRecord(found);
+
+        System.out.println("CANCELLED: " + found.getGuestName() + "'s booking. ID " + reservationId + " returned to pool.");
+    }
 }
 
 class BookingService {
@@ -82,53 +99,47 @@ class BookingService {
     public void processBooking(Reservation request, RoomInventory inventory) {
         try {
             validateBooking(request, inventory);
-
             String roomId = request.getRoomType().substring(0, 1).toUpperCase() + (random.nextInt(900) + 100);
             request.setReservationId(roomId);
 
-            int currentStock = inventory.getAvailability(request.getRoomType());
-            inventory.updateAvailability(request.getRoomType(), currentStock - 1);
+            inventory.updateAvailability(request.getRoomType(), inventory.getAvailability(request.getRoomType()) - 1);
             bookingHistory.addRecord(request);
-
-            System.out.println("SUCCESS: Confirmed for " + request.getGuestName() + " (ID: " + roomId + ")");
-
-        } catch (InvalidRoomException | NoAvailabilityException e) {
-            System.err.println("VALIDATION ERROR: " + e.getMessage());
+            System.out.println("SUCCESS: Confirmed " + request.getGuestName() + " (ID: " + roomId + ")");
         } catch (Exception e) {
-            System.err.println("SYSTEM ERROR: An unexpected error occurred.");
+            System.err.println("ERROR: " + e.getMessage());
         }
     }
 
     private void validateBooking(Reservation res, RoomInventory inventory) throws InvalidRoomException, NoAvailabilityException {
-        if (!inventory.isValidRoomType(res.getRoomType())) {
-            throw new InvalidRoomException("Room type '" + res.getRoomType() + "' does not exist.");
-        }
-        if (inventory.getAvailability(res.getRoomType()) <= 0) {
-            throw new NoAvailabilityException("No vacancy for room type: " + res.getRoomType());
-        }
+        if (!inventory.isValidRoomType(res.getRoomType())) throw new InvalidRoomException("Invalid type.");
+        if (inventory.getAvailability(res.getRoomType()) <= 0) throw new NoAvailabilityException("No vacancy.");
     }
 }
 
-// --- MAIN EXECUTION ---
+// --- MAIN APPLICATION ---
 public class BookMyStayApp {
     public static void main(String[] args) {
         RoomInventory inventory = new RoomInventory();
         BookingHistory history = new BookingHistory();
         BookingService bookingService = new BookingService(history);
+        CancellationService cancelService = new CancellationService();
 
-        System.out.println("--- Booking System with Validation ---\n");
+        // 1. Create a booking
+        Reservation aliceRes = new Reservation("Alice", "Single");
+        bookingService.processBooking(aliceRes, inventory);
+        String idToCancel = aliceRes.getReservationId();
 
-        // Valid Request
-        bookingService.processBooking(new Reservation("Alice", "Single"), inventory);
+        System.out.println("Inventory before cancellation: " + inventory.getAvailability("Single"));
 
-        // Invalid Request: Wrong Room Type
-        bookingService.processBooking(new Reservation("Bob", "Penthouse"), inventory);
+        // 2. Perform Cancellation
+        try {
+            cancelService.cancelBooking(idToCancel, history, inventory);
+        } catch (ReservationNotFoundException e) {
+            System.err.println(e.getMessage());
+        }
 
-        // Invalid Request: Out of Stock
-        bookingService.processBooking(new Reservation("Charlie", "Suite"), inventory);
-        bookingService.processBooking(new Reservation("David", "Suite"), inventory);
-        bookingService.processBooking(new Reservation("Eve", "Suite"), inventory); // Should trigger NoAvailabilityException
-
-        System.out.println("\nFinal History Size: " + history.getHistory().size());
+        // 3. Verify state
+        System.out.println("Inventory after cancellation: " + inventory.getAvailability("Single"));
+        System.out.println("History records: " + history.getHistory().size());
     }
 }
